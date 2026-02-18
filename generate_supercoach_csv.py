@@ -86,7 +86,7 @@ def _find_player_table(tables: List[List[List[str]]]) -> List[Dict[str, str]]:
         headers = [_normalize_header(h) for h in table[0]]
         if not headers:
             continue
-        if "player" in headers and "price" in headers:
+        if "player" in headers and ("price" in headers or "current" in headers):
             records: List[Dict[str, str]] = []
             for row in table[1:]:
                 if len(row) != len(headers):
@@ -108,7 +108,7 @@ def build_recommendations(html: str) -> List[Dict[str, str]]:
         if not name:
             continue
 
-        price = _to_price(player.get("price", ""))
+        price = _to_price(player.get("price") or player.get("current", ""))
         if price <= 0:
             continue
 
