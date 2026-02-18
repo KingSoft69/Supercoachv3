@@ -50,6 +50,16 @@ SAMPLE_HTML_NEWS_SIGNALS = """
 </table>
 """
 
+SAMPLE_HTML_ROWELL_AND_RUCKS = """
+<table>
+  <tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>
+  <tr><td>Matt Rowell</td><td>GCS</td><td>MID</td><td>$641,400</td><td>118.78</td></tr>
+  <tr><td>Tristan Xerri</td><td>NTH</td><td>RUC</td><td>$687,300</td><td>127.28</td></tr>
+  <tr><td>Brodie Grundy</td><td>SYD</td><td>RUC</td><td>$677,900</td><td>125.54</td></tr>
+  <tr><td>Max Gawn</td><td>MEL</td><td>RUC</td><td>$689,600</td><td>127.70</td></tr>
+</table>
+"""
+
 
 class BuildRecommendationsTest(unittest.TestCase):
     def test_growth_factor_prefers_rookie_and_young_development(self):
@@ -261,6 +271,22 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertLessEqual(pos_counts.get("MID", 0), 11)
         self.assertLessEqual(pos_counts.get("FWD", 0), 10)
         self.assertLessEqual(pos_counts.get("RUC", 0), 4)
+
+    def test_matt_rowell_injury_reduces_growth_factor(self):
+        rows = build_recommendations(SAMPLE_HTML_ROWELL_AND_RUCKS, team_size=4, salary_cap=5_000_000)
+        by_player = {row["player"]: row for row in rows}
+        self.assertEqual(by_player["Matt Rowell"]["growth_factor"], "0.85")
+
+    def test_ruck_rule_changes_reduce_stoppage_dependent_ruck_scoring(self):
+        rows = build_recommendations(SAMPLE_HTML_ROWELL_AND_RUCKS, team_size=4, salary_cap=5_000_000)
+        by_player = {row["player"]: row for row in rows}
+        self.assertEqual(by_player["Tristan Xerri"]["growth_factor"], "0.93")
+        self.assertEqual(by_player["Brodie Grundy"]["growth_factor"], "0.97")
+        self.assertEqual(by_player["Max Gawn"]["growth_factor"], "0.97")
+
+    def test_ruck_position_limit_reduced_under_new_rules(self):
+        from generate_supercoach_csv import POSITION_LIMITS
+        self.assertEqual(POSITION_LIMITS["RUC"], 3)
 
     def test_expected_price_3_influences_growth(self):
         html = """

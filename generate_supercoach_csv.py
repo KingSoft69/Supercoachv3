@@ -21,7 +21,7 @@ DEFAULT_BYES_PER_PLAYER = 1
 BREAKOUT_FALLBACK_MIN_PLAYERS = 100
 
 # Position slots for a SuperCoach squad (on-field + bench + emergency, relaxed)
-POSITION_LIMITS: Dict[str, int] = {"DEF": 9, "MID": 11, "RUC": 4, "FWD": 10}
+POSITION_LIMITS: Dict[str, int] = {"DEF": 9, "MID": 11, "RUC": 3, "FWD": 10}
 
 # Footywire position URL codes
 POSITION_URL_CODES: Dict[str, str] = {"DEF": "DE", "MID": "MI", "FWD": "FO", "RUC": "RU"}
@@ -46,6 +46,10 @@ PLAYER_NEWS_FACTORS = {
     "harry sheezel": 1.10,  # proven young gun expected to take next step
     "nick daicos": 1.05,  # elite consistency; Brownlow favourite
     "connor rozee": 1.05,  # dual-position premium; captaincy boost
+    "matt rowell": 0.85,  # broken finger in State of Origin; will miss start of season
+    "tristan xerri": 0.93,  # new ruck rules reduce stoppage scoring; highly stoppage-dependent
+    "brodie grundy": 0.97,  # new ruck rules minor impact; versatile scoring profile
+    "max gawn": 0.97,  # new ruck rules minor impact; versatile/mobile ruck
 }
 LOCKED_BREAKOUT_DEFAULTS = [
     {"player": "Jagga Smith", "team": "CAR", "position": "MID", "price": 119900, "current_avg": 22.0}
