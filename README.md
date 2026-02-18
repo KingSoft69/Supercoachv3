@@ -7,7 +7,7 @@ This repository includes a lightweight AFL SuperCoach 2026 CSV generator:
 - Script: `python generate_supercoach_csv.py`
 - Team selection controls:
   - `--salary-cap` (default: 10000000)
-  - `--team-size` (default: 22)
+  - `--team-size` (default: 30, includes bench)
   - `--max-players-per-bye` (default: 8)
 
 Model assumptions included in the script:
@@ -16,6 +16,7 @@ Model assumptions included in the script:
 - Young/mid-priced players are given a development uplift.
 - Premium players receive a smaller consistency uplift.
 - Team selection respects salary cap and limits concentrated bye-round exposure.
+- Output CSV includes selected team rows only.
 - `is_overall_winner=yes` marks the top projected selected player for end-of-season output.
 
 A GitHub Actions workflow runs on every pull request and regenerates the CSV in the repository root.

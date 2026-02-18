@@ -12,7 +12,7 @@ SOURCE_URL = "https://www.footywire.com/afl/footy/supercoach_prices"
 DEFAULT_OUTPUT = "supercoach_2026_output.csv"
 SC_PRICE_TO_AVG_RATIO = 5400.0
 DEFAULT_SALARY_CAP = 10_000_000
-DEFAULT_TEAM_SIZE = 22
+DEFAULT_TEAM_SIZE = 30
 DEFAULT_MAX_PLAYERS_PER_BYE = 8
 SEASON_ROUNDS = 24
 DEFAULT_BYES_PER_PLAYER = 1
@@ -115,6 +115,16 @@ def _select_team(
         bye_round = row["bye_round"]
         if total_price + price > salary_cap:
             continue
+        remaining_slots = team_size - len(selected) - 1
+        if remaining_slots > 0:
+            remaining_prices = sorted(
+                int(rows[j]["price"]) for j in ordered if j != idx and j not in selected
+            )
+            if len(remaining_prices) < remaining_slots:
+                continue
+            min_required = sum(remaining_prices[:remaining_slots])
+            if total_price + price + min_required > salary_cap:
+                continue
         if bye_round and bye_counts.get(bye_round, 0) >= max_players_per_bye:
             continue
         selected.append(idx)
@@ -218,6 +228,7 @@ def build_recommendations(
 
 def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    selected_rows = [row for row in rows if row.get("selected_for_team") == "yes"]
     fields = [
         "generated_at_utc",
         "source_url",
@@ -239,7 +250,7 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(selected_rows)
 
 
 def _read_html(input_html: str | None) -> str:
