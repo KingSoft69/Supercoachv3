@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 SOURCE_URL = "https://www.footywire.com/afl/footy/supercoach_prices"
 DEFAULT_OUTPUT = "supercoach_2026_output.csv"
+SC_PRICE_TO_AVG_RATIO = 5400.0
 
 
 class _TableParser(HTMLParser):
@@ -114,7 +115,7 @@ def build_recommendations(html: str) -> List[Dict[str, str]]:
         avg_col = next((k for k in player.keys() if "avg" in k), "")
         current_avg = _to_number(player.get(avg_col, "")) if avg_col else 0.0
         if current_avg <= 0:
-            current_avg = price / 5400.0
+            current_avg = price / SC_PRICE_TO_AVG_RATIO
 
         factor = _growth_factor(price)
         projected_avg = current_avg * factor
