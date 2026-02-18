@@ -12,6 +12,13 @@ SAMPLE_HTML = """
 </table>
 """
 
+SAMPLE_HTML_CURRENT_HEADER = """
+<table>
+  <tr><th>Player</th><th>Current</th><th>Expected Price</th></tr>
+  <tr><td>Main Table Player</td><td>$200,000</td><td>$220,000</td></tr>
+</table>
+"""
+
 
 class BuildRecommendationsTest(unittest.TestCase):
     def test_growth_factor_prefers_rookie_and_young_development(self):
@@ -21,6 +28,12 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertEqual(by_player["Rookie Star"]["growth_factor"], "1.25")
         self.assertEqual(by_player["Young Gun"]["growth_factor"], "1.10")
         self.assertEqual(by_player["Premium Pro"]["growth_factor"], "1.03")
+
+    def test_supports_main_table_current_price_header(self):
+        rows = build_recommendations(SAMPLE_HTML_CURRENT_HEADER)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["player"], "Main Table Player")
+        self.assertEqual(rows[0]["price"], "200000")
 
 
 if __name__ == "__main__":
