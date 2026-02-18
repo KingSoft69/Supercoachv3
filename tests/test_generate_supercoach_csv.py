@@ -68,7 +68,7 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertEqual(sum(1 for row in selected if row["bye_round"] == "13"), 1)
         self.assertEqual(sum(1 for row in selected if row["is_overall_winner"] == "yes"), 1)
 
-    def test_default_team_size_selects_30_players(self):
+    def test_default_team_size_is_30_players(self):
         player_rows = "".join(
             f"<tr><td>Player {i}</td><td>ADE</td><td>MID</td><td>$100,000</td><td>50.0</td></tr>"
             for i in range(1, 32)

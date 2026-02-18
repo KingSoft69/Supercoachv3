@@ -2,6 +2,7 @@
 import argparse
 import csv
 import re
+from heapq import nsmallest
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -105,6 +106,7 @@ def _select_team(
         reverse=True,
     )
     selected: List[int] = []
+    selected_set = set()
     total_price = 0
     bye_counts: Dict[str, int] = {}
     for idx in ordered:
@@ -117,17 +119,19 @@ def _select_team(
             continue
         remaining_slots = team_size - len(selected) - 1
         if remaining_slots > 0:
-            remaining_prices = sorted(
-                int(rows[j]["price"]) for j in ordered if j != idx and j not in selected
+            cheapest_remaining = nsmallest(
+                remaining_slots,
+                (int(rows[j]["price"]) for j in ordered if j != idx and j not in selected_set),
             )
-            if len(remaining_prices) < remaining_slots:
+            if len(cheapest_remaining) < remaining_slots:
                 continue
-            min_required = sum(remaining_prices[:remaining_slots])
+            min_required = sum(cheapest_remaining)
             if total_price + price + min_required > salary_cap:
                 continue
         if bye_round and bye_counts.get(bye_round, 0) >= max_players_per_bye:
             continue
         selected.append(idx)
+        selected_set.add(idx)
         total_price += price
         if bye_round:
             bye_counts[bye_round] = bye_counts.get(bye_round, 0) + 1
