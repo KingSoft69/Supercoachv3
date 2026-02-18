@@ -17,6 +17,15 @@ DEFAULT_TEAM_SIZE = 30
 DEFAULT_MAX_PLAYERS_PER_BYE = 8
 SEASON_ROUNDS = 24
 DEFAULT_BYES_PER_PLAYER = 1
+BREAKOUT_FALLBACK_MIN_PLAYERS = 100
+PLAYER_NEWS_FACTORS = {
+    "joshua kelly": 0.0,  # preseason hip surgery; expected to miss most/all of season
+    "jagga smith": 1.35,  # preseason rookie lock
+    "keidean coleman": 1.20,  # discounted comeback candidate after injury-impacted years
+}
+LOCKED_BREAKOUT_DEFAULTS = [
+    {"player": "Jagga Smith", "team": "CAR", "position": "MID", "price": 119900, "current_avg": 22.0}
+]
 
 
 class _TableParser(HTMLParser):
@@ -93,6 +102,19 @@ def _parse_bye_round(player: Dict[str, str]) -> str:
     return str(bye_round) if bye_round > 0 else ""
 
 
+def _player_news_factor(name: str) -> float | None:
+    normalized = " ".join(re.findall(r"[a-z]+", name.lower()))
+    for player_name, factor in PLAYER_NEWS_FACTORS.items():
+        if player_name in normalized:
+            return factor
+    return None
+
+
+def _is_locked_breakout(name: str) -> bool:
+    normalized = " ".join(re.findall(r"[a-z]+", name.lower()))
+    return any(lock["player"].lower() in normalized for lock in LOCKED_BREAKOUT_DEFAULTS)
+
+
 def _select_team(
     rows: List[Dict[str, str]], salary_cap: int, team_size: int, max_players_per_bye: int
 ) -> List[int]:
@@ -135,6 +157,38 @@ def _select_team(
         total_price += price
         if bye_round:
             bye_counts[bye_round] = bye_counts.get(bye_round, 0) + 1
+
+    locked_indexes = [i for i in ordered if _is_locked_breakout(rows[i]["player"])]
+    for lock_idx in locked_indexes:
+        if lock_idx in selected_set:
+            continue
+        lock_row = rows[lock_idx]
+        lock_price = int(lock_row["price"])
+        lock_bye = lock_row["bye_round"]
+        for out_idx in sorted(selected, key=lambda i: float(rows[i]["projected_season_points"])):
+            if _is_locked_breakout(rows[out_idx]["player"]):
+                continue
+            out_row = rows[out_idx]
+            out_price = int(out_row["price"])
+            out_bye = out_row["bye_round"]
+            if total_price - out_price + lock_price > salary_cap:
+                continue
+            if lock_bye and lock_bye != out_bye and bye_counts.get(lock_bye, 0) >= max_players_per_bye:
+                continue
+            selected.remove(out_idx)
+            selected_set.remove(out_idx)
+            total_price -= out_price
+            if out_bye:
+                bye_counts[out_bye] = max(0, bye_counts.get(out_bye, 0) - 1)
+                if bye_counts[out_bye] == 0:
+                    del bye_counts[out_bye]
+
+            selected.append(lock_idx)
+            selected_set.add(lock_idx)
+            total_price += lock_price
+            if lock_bye:
+                bye_counts[lock_bye] = bye_counts.get(lock_bye, 0) + 1
+            break
     return selected
 
 
@@ -182,6 +236,9 @@ def build_recommendations(
             current_avg = price / SC_PRICE_TO_AVG_RATIO
 
         factor = _growth_factor(price)
+        news_factor = _player_news_factor(name)
+        if news_factor is not None:
+            factor = news_factor
         projected_avg = current_avg * factor
         projected_price_gain = int(price * (factor - 1.0))
         value_score = projected_avg / (price / 100000.0)
@@ -208,6 +265,38 @@ def build_recommendations(
                 "is_overall_winner": "no",
             }
         )
+
+    if len(recommendations) >= BREAKOUT_FALLBACK_MIN_PLAYERS:
+        normalized_names = {" ".join(re.findall(r"[a-z]+", row["player"].lower())) for row in recommendations}
+        for breakout in LOCKED_BREAKOUT_DEFAULTS:
+            breakout_name_normalized = " ".join(re.findall(r"[a-z]+", breakout["player"].lower()))
+            if any(breakout_name_normalized in existing for existing in normalized_names):
+                continue
+            factor = _player_news_factor(breakout["player"]) or _growth_factor(int(breakout["price"]))
+            projected_avg = breakout["current_avg"] * factor
+            projected_price_gain = int(breakout["price"] * (factor - 1.0))
+            value_score = projected_avg / (breakout["price"] / 100000.0)
+            projected_season_points = projected_avg * (SEASON_ROUNDS - DEFAULT_BYES_PER_PLAYER)
+            recommendations.append(
+                {
+                    "generated_at_utc": timestamp,
+                    "source_url": SOURCE_URL,
+                    "player": breakout["player"],
+                    "team": breakout["team"],
+                    "position": breakout["position"],
+                    "price": str(breakout["price"]),
+                    "current_avg": f"{breakout['current_avg']:.2f}",
+                    "projected_avg": f"{projected_avg:.2f}",
+                    "growth_factor": f"{factor:.2f}",
+                    "projected_price_gain": str(projected_price_gain),
+                    "value_score": f"{value_score:.4f}",
+                    "bye_round": "",
+                    "projected_season_points": f"{projected_season_points:.2f}",
+                    "selected_for_team": "no",
+                    "selection_rank": "",
+                    "is_overall_winner": "no",
+                }
+            )
 
     selected_indexes = _select_team(
         recommendations,
