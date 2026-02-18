@@ -364,7 +364,7 @@ def _find_player_table(tables: List[List[List[str]]]) -> List[Dict[str, str]]:
     return []
 
 
-def _scrape_footywire_positions(html: str) -> Dict[str, Set[str]]:
+def _scrape_footywire_positions(html: str) -> Set[str]:
     """Extract player names from a position-filtered footywire page."""
     names: Set[str] = set()
     for match in re.finditer(
