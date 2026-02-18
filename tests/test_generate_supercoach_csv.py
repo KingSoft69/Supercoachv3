@@ -41,6 +41,15 @@ SAMPLE_HTML_SALARY_CAP_FULL_TEAM = """
 </table>
 """
 
+SAMPLE_HTML_NEWS_SIGNALS = """
+<table>
+  <tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>
+  <tr><td>Joshua Kelly</td><td>GWS</td><td>MID</td><td>$477,400</td><td>88.4</td></tr>
+  <tr><td>Jagga Smith</td><td>CAR</td><td>MID</td><td>$119,900</td><td>22.0</td></tr>
+  <tr><td>Keidean Coleman</td><td>BL</td><td>DEF</td><td>$233,800</td><td>48.0</td></tr>
+</table>
+"""
+
 
 class BuildRecommendationsTest(unittest.TestCase):
     def test_growth_factor_prefers_rookie_and_young_development(self):
@@ -102,6 +111,32 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertEqual(len(selected), 3)
         self.assertLessEqual(sum(int(row["price"]) for row in selected), 600000)
         self.assertNotIn("Expensive Star", {row["player"] for row in selected})
+
+    def test_applies_news_adjustments_for_injury_breakout_and_comeback(self):
+        rows = build_recommendations(SAMPLE_HTML_NEWS_SIGNALS, team_size=2, salary_cap=600000)
+        by_player = {row["player"]: row for row in rows}
+        self.assertEqual(by_player["Joshua Kelly"]["growth_factor"], "0.00")
+        self.assertEqual(by_player["Joshua Kelly"]["selected_for_team"], "no")
+        self.assertEqual(by_player["Jagga Smith"]["growth_factor"], "1.35")
+        self.assertEqual(by_player["Jagga Smith"]["selected_for_team"], "yes")
+        self.assertEqual(by_player["Keidean Coleman"]["growth_factor"], "1.20")
+
+    def test_adds_jagga_smith_as_breakout_lock_when_missing(self):
+        other_rows = "".join(
+            f"<tr><td>Other {i}</td><td>ADE</td><td>MID</td><td>$300,000</td><td>80.0</td></tr>"
+            for i in range(1, 102)
+        )
+        html = (
+            "<table>"
+            "<tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>"
+            "<tr><td>Joshua Kelly</td><td>GWS</td><td>MID</td><td>$477,400</td><td>88.4</td></tr>"
+            f"{other_rows}"
+            "</table>"
+        )
+        rows = build_recommendations(html, team_size=1, salary_cap=130000)
+        by_player = {row["player"]: row for row in rows}
+        self.assertIn("Jagga Smith", by_player)
+        self.assertEqual(by_player["Jagga Smith"]["selected_for_team"], "yes")
 
 
 if __name__ == "__main__":
