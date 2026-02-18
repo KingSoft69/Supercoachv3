@@ -17,9 +17,10 @@ DEFAULT_TEAM_SIZE = 30
 DEFAULT_MAX_PLAYERS_PER_BYE = 8
 SEASON_ROUNDS = 24
 DEFAULT_BYES_PER_PLAYER = 1
+# Only inject fallback breakout locks for large real-world pulls, not tiny unit-test tables.
 BREAKOUT_FALLBACK_MIN_PLAYERS = 100
 PLAYER_NEWS_FACTORS = {
-    "joshua kelly": 0.0,  # preseason hip surgery; expected to miss most/all of season
+    "joshua kelly": 0.0,  # Joshua Kelly preseason hip surgery; expected to miss most/all of season
     "jagga smith": 1.35,  # preseason rookie lock
     "keidean coleman": 1.20,  # discounted comeback candidate after injury-impacted years
 }
@@ -82,6 +83,10 @@ def _normalize_header(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def _normalize_player_name(value: str) -> str:
+    return " ".join(re.findall(r"[a-z]+", value.lower()))
+
+
 def _growth_factor(price: int) -> float:
     if price <= 180000:
         return 1.25  # rookie price growth potential
@@ -103,16 +108,19 @@ def _parse_bye_round(player: Dict[str, str]) -> str:
 
 
 def _player_news_factor(name: str) -> float | None:
-    normalized = " ".join(re.findall(r"[a-z]+", name.lower()))
+    normalized = _normalize_player_name(name)
     for player_name, factor in PLAYER_NEWS_FACTORS.items():
-        if player_name in normalized:
+        if normalized == player_name or normalized.startswith(f"{player_name} "):
             return factor
     return None
 
 
 def _is_locked_breakout(name: str) -> bool:
-    normalized = " ".join(re.findall(r"[a-z]+", name.lower()))
-    return any(lock["player"].lower() in normalized for lock in LOCKED_BREAKOUT_DEFAULTS)
+    normalized = _normalize_player_name(name)
+    return any(
+        normalized == lock["player"].lower() or normalized.startswith(f"{lock['player'].lower()} ")
+        for lock in LOCKED_BREAKOUT_DEFAULTS
+    )
 
 
 def _select_team(
@@ -267,10 +275,14 @@ def build_recommendations(
         )
 
     if len(recommendations) >= BREAKOUT_FALLBACK_MIN_PLAYERS:
-        normalized_names = {" ".join(re.findall(r"[a-z]+", row["player"].lower())) for row in recommendations}
+        normalized_names = {_normalize_player_name(row["player"]) for row in recommendations}
         for breakout in LOCKED_BREAKOUT_DEFAULTS:
-            breakout_name_normalized = " ".join(re.findall(r"[a-z]+", breakout["player"].lower()))
-            if any(breakout_name_normalized in existing for existing in normalized_names):
+            breakout_name_normalized = _normalize_player_name(breakout["player"])
+            if any(
+                existing == breakout_name_normalized
+                or existing.startswith(f"{breakout_name_normalized} ")
+                for existing in normalized_names
+            ):
                 continue
             factor = _player_news_factor(breakout["player"]) or _growth_factor(int(breakout["price"]))
             projected_avg = breakout["current_avg"] * factor
