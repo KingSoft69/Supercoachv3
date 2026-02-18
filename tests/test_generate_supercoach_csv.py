@@ -138,6 +138,148 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertIn("Jagga Smith", by_player)
         self.assertEqual(by_player["Jagga Smith"]["selected_for_team"], "yes")
 
+    def test_footywire_parser_extracts_player_name_and_team(self):
+        from generate_supercoach_csv import _parse_footywire_players
+
+        html = """
+        <table>
+        <tr class="darkcolor" id="rowpid_3921">
+        <td height="24" align="left" nowrap>
+         <span class="hiddenspan" id="cellpid_3921">Marcus Bontempelli</span>
+         <a href="pu-western-bulldogs--marcus-bontempelli" id="cellapid_3921">M Bontempelli</a>
+         <span class="hiddenspan" id="celltid_3921">Bulldogs</span>
+        </td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">?</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        </tr>
+        </table>
+        """
+        players = _parse_footywire_players(html)
+        self.assertEqual(len(players), 1)
+        self.assertEqual(players[0]["player"], "Marcus Bontempelli")
+        self.assertEqual(players[0]["team"], "Bulldogs")
+        self.assertEqual(players[0]["current"], "$706,800")
+
+    def test_footywire_parser_multiple_players(self):
+        from generate_supercoach_csv import _parse_footywire_players
+
+        html = """
+        <table>
+        <tr class="darkcolor" id="rowpid_100">
+        <td><span class="hiddenspan" id="cellpid_100">Zak Butters</span>
+        <a href="pu-power--zak-butters">Z Butters</a>
+        <span class="hiddenspan" id="celltid_100">Power</span></td>
+        <td>$654,800</td><td>+$0</td><td>?</td><td>+$0</td>
+        <td>$654,800</td><td>+$0</td><td>$654,800</td><td>+$0</td>
+        <td>$676,300</td><td>+$21,500</td>
+        </tr>
+        <tr class="lightcolor" id="rowpid_101">
+        <td><span class="hiddenspan" id="cellpid_101">Nick Daicos</span>
+        <a href="pu-magpies--nick-daicos">N Daicos</a>
+        <span class="hiddenspan" id="celltid_101">Magpies</span></td>
+        <td>$628,400</td><td>+$0</td><td>?</td><td>+$0</td>
+        <td>$628,400</td><td>+$0</td><td>$628,400</td><td>+$0</td>
+        <td>$628,400</td><td>+$0</td>
+        </tr>
+        </table>
+        """
+        players = _parse_footywire_players(html)
+        self.assertEqual(len(players), 2)
+        self.assertEqual(players[0]["player"], "Zak Butters")
+        self.assertEqual(players[1]["player"], "Nick Daicos")
+
+    def test_footywire_build_recommendations_uses_correct_names(self):
+        html = """
+        <table>
+        <tr class="darkcolor" id="rowpid_100">
+        <td><span class="hiddenspan" id="cellpid_100">Test Player</span>
+        <a href="pu-team--test-player">T Player</a>
+        <span class="hiddenspan" id="celltid_100">Bulldogs</span></td>
+        <td>$300,000</td><td>+$0</td><td>?</td><td>+$0</td>
+        <td>$300,000</td><td>+$0</td><td>$300,000</td><td>+$0</td>
+        <td>$300,000</td><td>+$0</td>
+        </tr>
+        </table>
+        """
+        rows = build_recommendations(html, team_size=1, salary_cap=500000)
+        selected = [r for r in rows if r["selected_for_team"] == "yes"]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["player"], "Test Player")
+        self.assertEqual(selected[0]["team"], "WBD")
+
+    def test_team_abbreviation_mapping(self):
+        from generate_supercoach_csv import _team_abbrev
+
+        self.assertEqual(_team_abbrev("Bulldogs"), "WBD")
+        self.assertEqual(_team_abbrev("Demons"), "MEL")
+        self.assertEqual(_team_abbrev("Power"), "PTA")
+        self.assertEqual(_team_abbrev("Magpies"), "COL")
+        self.assertEqual(_team_abbrev("Saints"), "STK")
+
+    def test_position_limits_enforced_with_diverse_positions(self):
+        rows_html = []
+        for i in range(12):
+            rows_html.append(
+                f"<tr><td>Def {i}</td><td>ADE</td><td>DEF</td>"
+                f"<td>$300,000</td><td>80.0</td></tr>"
+            )
+        for i in range(12):
+            rows_html.append(
+                f"<tr><td>Mid {i}</td><td>BL</td><td>MID</td>"
+                f"<td>$300,000</td><td>80.0</td></tr>"
+            )
+        for i in range(12):
+            rows_html.append(
+                f"<tr><td>Fwd {i}</td><td>COLL</td><td>FWD</td>"
+                f"<td>$300,000</td><td>80.0</td></tr>"
+            )
+        for i in range(6):
+            rows_html.append(
+                f"<tr><td>Ruc {i}</td><td>ESS</td><td>RUC</td>"
+                f"<td>$300,000</td><td>80.0</td></tr>"
+            )
+        html = (
+            "<table>"
+            "<tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>"
+            + "".join(rows_html)
+            + "</table>"
+        )
+        rows = build_recommendations(html, team_size=30, salary_cap=50_000_000)
+        selected = [r for r in rows if r["selected_for_team"] == "yes"]
+        self.assertEqual(len(selected), 30)
+        from collections import Counter
+        pos_counts = Counter(r["position"] for r in selected)
+        self.assertLessEqual(pos_counts.get("DEF", 0), 9)
+        self.assertLessEqual(pos_counts.get("MID", 0), 11)
+        self.assertLessEqual(pos_counts.get("FWD", 0), 10)
+        self.assertLessEqual(pos_counts.get("RUC", 0), 4)
+
+    def test_expected_price_3_influences_growth(self):
+        html = """
+        <table>
+        <tr class="darkcolor" id="rowpid_200">
+        <td><span class="hiddenspan" id="cellpid_200">Rising Star</span>
+        <a href="pu-team--rising-star">R Star</a>
+        <span class="hiddenspan" id="celltid_200">Lions</span></td>
+        <td>$300,000</td><td>+$0</td><td>?</td><td>+$0</td>
+        <td>$300,000</td><td>+$0</td><td>$300,000</td><td>+$0</td>
+        <td>$360,000</td><td>+$60,000</td>
+        </tr>
+        </table>
+        """
+        rows = build_recommendations(html, team_size=1, salary_cap=500000)
+        player = rows[0]
+        factor = float(player["growth_factor"])
+        self.assertGreater(factor, 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

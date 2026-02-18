@@ -6,7 +6,7 @@ from heapq import nsmallest
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Set, Tuple
 from urllib.request import Request, urlopen
 
 SOURCE_URL = "https://www.footywire.com/afl/footy/supercoach_prices"
@@ -19,10 +19,33 @@ SEASON_ROUNDS = 24
 DEFAULT_BYES_PER_PLAYER = 1
 # Only inject fallback breakout locks for large real-world pulls, not tiny unit-test tables.
 BREAKOUT_FALLBACK_MIN_PLAYERS = 100
+
+# Position slots for a SuperCoach squad (on-field + bench + emergency, relaxed)
+POSITION_LIMITS: Dict[str, int] = {"DEF": 9, "MID": 11, "RUC": 4, "FWD": 10}
+
+# Footywire position URL codes
+POSITION_URL_CODES: Dict[str, str] = {"DEF": "DE", "MID": "MI", "FWD": "FO", "RUC": "RU"}
+
+# Team abbreviation mapping (footywire long name -> short code)
+TEAM_ABBREV: Dict[str, str] = {
+    "crows": "ADE", "lions": "BRL", "blues": "CAR", "magpies": "COL",
+    "bombers": "ESS", "dockers": "FRE", "cats": "GEE", "suns": "GCS",
+    "giants": "GWS", "hawks": "HAW", "demons": "MEL", "kangaroos": "NTH",
+    "power": "PTA", "tigers": "RIC", "saints": "STK", "swans": "SYD",
+    "eagles": "WCE", "bulldogs": "WBD",
+}
+
 PLAYER_NEWS_FACTORS = {
-    "joshua kelly": 0.0,  # Joshua Kelly preseason hip surgery; expected to miss most/all of season
+    "joshua kelly": 0.0,  # preseason hip surgery; expected to miss most/all of season
     "jagga smith": 1.35,  # preseason rookie lock
     "keidean coleman": 1.20,  # discounted comeback candidate after injury-impacted years
+    "christian petracca": 0.85,  # returning from serious lacerated spleen; managed load expected
+    "callum mills": 0.90,  # returning from ACL; limited early output
+    "sam walsh": 1.08,  # bounce-back season expected after quiet 2025
+    "will ashcroft": 1.12,  # second full season post-ACL; primed for breakout
+    "harry sheezel": 1.10,  # proven young gun expected to take next step
+    "nick daicos": 1.05,  # elite consistency; Brownlow favourite
+    "connor rozee": 1.05,  # dual-position premium; captaincy boost
 }
 LOCKED_BREAKOUT_DEFAULTS = [
     {"player": "Jagga Smith", "team": "CAR", "position": "MID", "price": 119900, "current_avg": 22.0}
@@ -30,6 +53,8 @@ LOCKED_BREAKOUT_DEFAULTS = [
 
 
 class _TableParser(HTMLParser):
+    """Generic HTML table parser that extracts all tables as lists of rows."""
+
     def __init__(self) -> None:
         super().__init__()
         self.tables: List[List[List[str]]] = []
@@ -70,6 +95,84 @@ class _TableParser(HTMLParser):
             self._current_cell.append(data)
 
 
+class _FootywireParser(HTMLParser):
+    """Parser specifically for the footywire supercoach_prices page structure.
+
+    The page uses hidden spans in the player cell:
+      <span class="hiddenspan" id="cellpid_NNN">Full Name</span>
+      <a href="pu-team--player">Short Name</a>
+      <span class="hiddenspan" id="celltid_NNN">Team</span>
+
+    The table headers are: Player, Current, Total Change, Change %,
+    Last Change, Expected Price, Expected Change, Expected Price 2, ...
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.players: List[Dict[str, str]] = []
+        self._in_player_row = False
+        self._in_cell = False
+        self._cell_index = 0
+        self._current_cells: List[str] = []
+        self._current_cell_parts: List[str] = []
+        self._current_player_name = ""
+        self._current_team = ""
+        self._in_hidden_span = False
+        self._hidden_span_id = ""
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attr_dict = dict(attrs)
+        if tag == "tr":
+            cls = attr_dict.get("class", "")
+            if "darkcolor" in cls or "lightcolor" in cls:
+                self._in_player_row = True
+                self._cell_index = 0
+                self._current_cells = []
+                self._current_player_name = ""
+                self._current_team = ""
+        elif self._in_player_row and tag == "td":
+            self._in_cell = True
+            self._current_cell_parts = []
+        elif self._in_player_row and tag == "span":
+            span_id = attr_dict.get("id", "")
+            span_cls = attr_dict.get("class", "")
+            if "hiddenspan" in span_cls:
+                self._in_hidden_span = True
+                self._hidden_span_id = span_id
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "span" and self._in_hidden_span:
+            self._in_hidden_span = False
+            self._hidden_span_id = ""
+        elif tag == "td" and self._in_cell:
+            text = " ".join("".join(self._current_cell_parts).split())
+            self._current_cells.append(text)
+            self._cell_index += 1
+            self._in_cell = False
+        elif tag == "tr" and self._in_player_row:
+            self._in_player_row = False
+            if self._current_player_name and len(self._current_cells) >= 2:
+                price_str = self._current_cells[1] if len(self._current_cells) > 1 else ""
+                expected_price = self._current_cells[5] if len(self._current_cells) > 5 else ""
+                expected_price_3 = self._current_cells[9] if len(self._current_cells) > 9 else ""
+                self.players.append({
+                    "player": self._current_player_name,
+                    "team": self._current_team,
+                    "current": price_str,
+                    "expected_price": expected_price,
+                    "expected_price_3": expected_price_3,
+                })
+
+    def handle_data(self, data: str) -> None:
+        if self._in_hidden_span:
+            if self._hidden_span_id.startswith("cellpid_"):
+                self._current_player_name = data.strip()
+            elif self._hidden_span_id.startswith("celltid_"):
+                self._current_team = data.strip()
+        elif self._in_cell and self._cell_index > 0:
+            self._current_cell_parts.append(data)
+
+
 def _to_number(value: str) -> float:
     cleaned = re.sub(r"[^0-9.\-]", "", value or "")
     return float(cleaned) if cleaned else 0.0
@@ -85,6 +188,10 @@ def _normalize_header(value: str) -> str:
 
 def _normalize_player_name(value: str) -> str:
     return " ".join(re.findall(r"[a-z]+", value.lower()))
+
+
+def _team_abbrev(team_long: str) -> str:
+    return TEAM_ABBREV.get(team_long.lower().strip(), team_long.upper()[:3])
 
 
 def _growth_factor(price: int) -> float:
@@ -107,7 +214,7 @@ def _parse_bye_round(player: Dict[str, str]) -> str:
     return str(bye_round) if bye_round > 0 else ""
 
 
-def _player_news_factor(name: str) -> float | None:
+def _player_news_factor(name: str) -> Optional[float]:
     normalized = _normalize_player_name(name)
     for player_name, factor in PLAYER_NEWS_FACTORS.items():
         if normalized == player_name or normalized.startswith(f"{player_name} "):
@@ -123,6 +230,17 @@ def _is_locked_breakout(name: str) -> bool:
     )
 
 
+def _primary_position(position: str) -> str:
+    """Return the first listed position for slot counting."""
+    parts = [p.strip() for p in position.split("/") if p.strip()]
+    return parts[0] if parts else ""
+
+
+def _fits_position(position: str, slot: str) -> bool:
+    """Check if a player with *position* can fill a particular position *slot*."""
+    return slot in [p.strip() for p in position.split("/") if p.strip()]
+
+
 def _select_team(
     rows: List[Dict[str, str]], salary_cap: int, team_size: int, max_players_per_bye: int
 ) -> List[int]:
@@ -135,18 +253,27 @@ def _select_team(
         ),
         reverse=True,
     )
+
+    position_set = {rows[i].get("position", "") for i in ordered} - {""}
+    use_position_limits = len(position_set) >= 2 and team_size >= 20
+
     selected: List[int] = []
-    selected_set = set()
+    selected_set: Set[int] = set()
     total_price = 0
     bye_counts: Dict[str, int] = {}
+    pos_counts: Dict[str, int] = {}
+
     for idx in ordered:
         if len(selected) >= team_size:
             break
         row = rows[idx]
         price = int(row["price"])
         bye_round = row["bye_round"]
+        position = row.get("position", "")
+
         if total_price + price > salary_cap:
             continue
+
         remaining_slots = team_size - len(selected) - 1
         if remaining_slots > 0:
             cheapest_remaining = nsmallest(
@@ -158,8 +285,28 @@ def _select_team(
             min_required = sum(cheapest_remaining)
             if total_price + price + min_required > salary_cap:
                 continue
+
         if bye_round and bye_counts.get(bye_round, 0) >= max_players_per_bye:
             continue
+
+        if use_position_limits and position:
+            primary = _primary_position(position)
+            limit = POSITION_LIMITS.get(primary, team_size)
+            if pos_counts.get(primary, 0) >= limit:
+                placed = False
+                for alt in position.split("/"):
+                    alt = alt.strip()
+                    if alt and alt != primary:
+                        alt_limit = POSITION_LIMITS.get(alt, team_size)
+                        if pos_counts.get(alt, 0) < alt_limit:
+                            pos_counts[alt] = pos_counts.get(alt, 0) + 1
+                            placed = True
+                            break
+                if not placed:
+                    continue
+            else:
+                pos_counts[primary] = pos_counts.get(primary, 0) + 1
+
         selected.append(idx)
         selected_set.add(idx)
         total_price += price
@@ -217,15 +364,68 @@ def _find_player_table(tables: List[List[List[str]]]) -> List[Dict[str, str]]:
     return []
 
 
+def _scrape_footywire_positions(html: str) -> Set[str]:
+    """Extract player names from a position-filtered footywire page."""
+    names: Set[str] = set()
+    for match in re.finditer(
+        r'<span\s+class="hiddenspan"\s+id="cellpid_\d+">([^<]+)</span>', html
+    ):
+        names.add(match.group(1).strip())
+    return names
+
+
+def _fetch_url(url: str) -> str:
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(request, timeout=30) as response:
+        return response.read().decode("utf-8", errors="ignore")
+
+
+def _scrape_position_map(base_url: str) -> Dict[str, str]:
+    """Scrape position-specific pages and build a player -> position map.
+
+    Players appearing on multiple position pages get a dual-position string
+    like ``DEF/MID``.
+    """
+    position_map: Dict[str, List[str]] = {}
+    for pos_label, url_code in POSITION_URL_CODES.items():
+        url = f"{base_url}?p={url_code}"
+        try:
+            html = _fetch_url(url)
+        except Exception:
+            continue
+        names = _scrape_footywire_positions(html)
+        for name in names:
+            position_map.setdefault(name, []).append(pos_label)
+
+    return {name: "/".join(positions) for name, positions in position_map.items()}
+
+
+def _parse_footywire_players(html: str) -> List[Dict[str, str]]:
+    """Parse the main footywire supercoach_prices page using the specialised parser."""
+    fw = _FootywireParser()
+    fw.feed(html)
+    return fw.players
+
+
 def build_recommendations(
     html: str,
     salary_cap: int = DEFAULT_SALARY_CAP,
     team_size: int = DEFAULT_TEAM_SIZE,
     max_players_per_bye: int = DEFAULT_MAX_PLAYERS_PER_BYE,
+    position_map: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
-    parser = _TableParser()
-    parser.feed(html)
-    players = _find_player_table(parser.tables)
+    # Try footywire-specific parser first; fall back to generic table parser
+    fw_players = _parse_footywire_players(html)
+
+    if fw_players:
+        players = fw_players
+        is_footywire = True
+    else:
+        parser = _TableParser()
+        parser.feed(html)
+        players = _find_player_table(parser.tables)
+        is_footywire = False
+
     timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     recommendations: List[Dict[str, str]] = []
@@ -234,7 +434,25 @@ def build_recommendations(
         if not name:
             continue
 
-        price = _to_price(player.get("price") or player.get("current", ""))
+        if is_footywire:
+            price = _to_price(player.get("current", ""))
+            team_raw = player.get("team", "")
+            team = _team_abbrev(team_raw) if team_raw else ""
+            position = ""
+            if position_map:
+                position = position_map.get(name, "")
+
+            expected_price_3 = _to_price(player.get("expected_price_3", ""))
+            if expected_price_3 > 0 and price > 0:
+                expected_change_ratio = expected_price_3 / price
+            else:
+                expected_change_ratio = 1.0
+        else:
+            price = _to_price(player.get("price") or player.get("current", ""))
+            team = player.get("team", "")
+            position = player.get("position", player.get("pos", ""))
+            expected_change_ratio = 1.0
+
         if price <= 0:
             continue
 
@@ -247,6 +465,10 @@ def build_recommendations(
         news_factor = _player_news_factor(name)
         if news_factor is not None:
             factor = news_factor
+        elif is_footywire and expected_change_ratio != 1.0:
+            blended = (factor + expected_change_ratio) / 2.0
+            factor = max(blended, 0.0)
+
         projected_avg = current_avg * factor
         projected_price_gain = int(price * (factor - 1.0))
         value_score = projected_avg / (price / 100000.0)
@@ -258,8 +480,8 @@ def build_recommendations(
                 "generated_at_utc": timestamp,
                 "source_url": SOURCE_URL,
                 "player": name,
-                "team": player.get("team", ""),
-                "position": player.get("position", player.get("pos", "")),
+                "team": team,
+                "position": position,
                 "price": str(price),
                 "current_avg": f"{current_avg:.2f}",
                 "projected_avg": f"{projected_avg:.2f}",
@@ -358,7 +580,7 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
         writer.writerows(selected_rows)
 
 
-def _read_html(input_html: str | None) -> str:
+def _read_html(input_html: Optional[str]) -> str:
     if input_html:
         return Path(input_html).read_text(encoding="utf-8")
 
@@ -368,29 +590,48 @@ def _read_html(input_html: str | None) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate AFL SuperCoach 2026 recommendation CSV")
-    parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output CSV path")
-    parser.add_argument("--input-html", help="Local HTML file for offline/testing use")
-    parser.add_argument("--salary-cap", type=int, default=DEFAULT_SALARY_CAP, help="Team salary cap")
-    parser.add_argument("--team-size", type=int, default=DEFAULT_TEAM_SIZE, help="Number of players to select")
-    parser.add_argument(
+    ap = argparse.ArgumentParser(description="Generate AFL SuperCoach 2026 recommendation CSV")
+    ap.add_argument("--output", default=DEFAULT_OUTPUT, help="Output CSV path")
+    ap.add_argument("--input-html", help="Local HTML file for offline/testing use")
+    ap.add_argument("--salary-cap", type=int, default=DEFAULT_SALARY_CAP, help="Team salary cap")
+    ap.add_argument("--team-size", type=int, default=DEFAULT_TEAM_SIZE, help="Number of players to select")
+    ap.add_argument(
         "--max-players-per-bye",
         type=int,
         default=DEFAULT_MAX_PLAYERS_PER_BYE,
         help="Maximum selected players sharing the same bye round",
     )
-    args = parser.parse_args()
+    ap.add_argument(
+        "--skip-positions",
+        action="store_true",
+        help="Skip fetching per-position pages (faster but no position data)",
+    )
+    args = ap.parse_args()
 
     html = _read_html(args.input_html)
+
+    position_map: Optional[Dict[str, str]] = None
+    if not args.input_html and not args.skip_positions:
+        position_map = _scrape_position_map(SOURCE_URL)
+
     rows = build_recommendations(
         html,
         salary_cap=args.salary_cap,
         team_size=args.team_size,
         max_players_per_bye=args.max_players_per_bye,
+        position_map=position_map,
     )
     write_csv(rows, Path(args.output))
 
-    print(f"Generated {len(rows)} rows at {args.output}")
+    selected = [r for r in rows if r["selected_for_team"] == "yes"]
+    total_spend = sum(int(r["price"]) for r in selected)
+    print(f"Generated {len(rows)} player rows, selected {len(selected)} for team")
+    print(f"Total spend: ${total_spend:,} / ${args.salary_cap:,}")
+    if any(r.get("position") for r in selected):
+        from collections import Counter
+        pos_summary = Counter(_primary_position(r["position"]) for r in selected)
+        print(f"Positions: {dict(pos_summary)}")
+    print(f"Output: {args.output}")
     return 0
 
 
