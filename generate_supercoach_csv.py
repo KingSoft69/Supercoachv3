@@ -15,6 +15,7 @@ DEFAULT_SALARY_CAP = 10_000_000
 DEFAULT_TEAM_SIZE = 22
 DEFAULT_MAX_PLAYERS_PER_BYE = 8
 SEASON_ROUNDS = 24
+DEFAULT_BYES_PER_PLAYER = 1
 
 
 class _TableParser(HTMLParser):
@@ -171,9 +172,7 @@ def build_recommendations(
         projected_price_gain = int(price * (factor - 1.0))
         value_score = projected_avg / (price / 100000.0)
         bye_round = _parse_bye_round(player)
-        projected_season_points = projected_avg * (
-            SEASON_ROUNDS - (1 if bye_round else 0)
-        )
+        projected_season_points = projected_avg * (SEASON_ROUNDS - DEFAULT_BYES_PER_PLAYER)
 
         recommendations.append(
             {

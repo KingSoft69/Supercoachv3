@@ -52,6 +52,7 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertEqual({row["player"] for row in selected}, {"Alpha Mid", "Gamma Def"})
         self.assertEqual(sum(int(row["price"]) for row in selected), 500000)
         self.assertEqual(sum(1 for row in selected if row["bye_round"] == "12"), 1)
+        self.assertEqual(sum(1 for row in selected if row["bye_round"] == "13"), 1)
         self.assertEqual(sum(1 for row in selected if row["is_overall_winner"] == "yes"), 1)
 
 
