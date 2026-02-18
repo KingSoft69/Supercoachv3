@@ -1,0 +1,39 @@
+name: Update SuperCoach CSV
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-csv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate CSV
+        run: python generate_supercoach_csv.py --output supercoach_2026_output.csv
+
+      - name: Commit CSV changes
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          if git diff --quiet -- supercoach_2026_output.csv; then
+            echo "No CSV changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add supercoach_2026_output.csv
+          git commit -m "chore: update supercoach 2026 output csv"
+          git push
