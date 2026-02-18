@@ -11,6 +11,10 @@ from urllib.request import Request, urlopen
 SOURCE_URL = "https://www.footywire.com/afl/footy/supercoach_prices"
 DEFAULT_OUTPUT = "supercoach_2026_output.csv"
 SC_PRICE_TO_AVG_RATIO = 5400.0
+DEFAULT_SALARY_CAP = 10_000_000
+DEFAULT_TEAM_SIZE = 22
+DEFAULT_MAX_PLAYERS_PER_BYE = 8
+SEASON_ROUNDS = 24
 
 
 class _TableParser(HTMLParser):
@@ -79,6 +83,46 @@ def _growth_factor(price: int) -> float:
     return 1.0
 
 
+def _parse_bye_round(player: Dict[str, str]) -> str:
+    bye_col = next((k for k in player.keys() if "bye" in k), "")
+    if not bye_col:
+        return ""
+    bye_round = int(_to_number(player.get(bye_col, "")))
+    return str(bye_round) if bye_round > 0 else ""
+
+
+def _select_team(
+    rows: List[Dict[str, str]], salary_cap: int, team_size: int, max_players_per_bye: int
+) -> List[int]:
+    ordered = sorted(
+        range(len(rows)),
+        key=lambda i: (
+            float(rows[i]["projected_season_points"]),
+            float(rows[i]["projected_season_points"]) / max(int(rows[i]["price"]), 1),
+            float(rows[i]["value_score"]),
+        ),
+        reverse=True,
+    )
+    selected: List[int] = []
+    total_price = 0
+    bye_counts: Dict[str, int] = {}
+    for idx in ordered:
+        if len(selected) >= team_size:
+            break
+        row = rows[idx]
+        price = int(row["price"])
+        bye_round = row["bye_round"]
+        if total_price + price > salary_cap:
+            continue
+        if bye_round and bye_counts.get(bye_round, 0) >= max_players_per_bye:
+            continue
+        selected.append(idx)
+        total_price += price
+        if bye_round:
+            bye_counts[bye_round] = bye_counts.get(bye_round, 0) + 1
+    return selected
+
+
 def _find_player_table(tables: List[List[List[str]]]) -> List[Dict[str, str]]:
     for table in tables:
         if not table:
@@ -96,7 +140,12 @@ def _find_player_table(tables: List[List[List[str]]]) -> List[Dict[str, str]]:
     return []
 
 
-def build_recommendations(html: str) -> List[Dict[str, str]]:
+def build_recommendations(
+    html: str,
+    salary_cap: int = DEFAULT_SALARY_CAP,
+    team_size: int = DEFAULT_TEAM_SIZE,
+    max_players_per_bye: int = DEFAULT_MAX_PLAYERS_PER_BYE,
+) -> List[Dict[str, str]]:
     parser = _TableParser()
     parser.feed(html)
     players = _find_player_table(parser.tables)
@@ -121,6 +170,10 @@ def build_recommendations(html: str) -> List[Dict[str, str]]:
         projected_avg = current_avg * factor
         projected_price_gain = int(price * (factor - 1.0))
         value_score = projected_avg / (price / 100000.0)
+        bye_round = _parse_bye_round(player)
+        projected_season_points = projected_avg * (
+            SEASON_ROUNDS - (1 if bye_round else 0)
+        )
 
         recommendations.append(
             {
@@ -135,8 +188,30 @@ def build_recommendations(html: str) -> List[Dict[str, str]]:
                 "growth_factor": f"{factor:.2f}",
                 "projected_price_gain": str(projected_price_gain),
                 "value_score": f"{value_score:.4f}",
+                "bye_round": bye_round,
+                "projected_season_points": f"{projected_season_points:.2f}",
+                "selected_for_team": "no",
+                "selection_rank": "",
+                "is_overall_winner": "no",
             }
         )
+
+    selected_indexes = _select_team(
+        recommendations,
+        salary_cap=salary_cap,
+        team_size=team_size,
+        max_players_per_bye=max_players_per_bye,
+    )
+    selected_rows = sorted(
+        selected_indexes,
+        key=lambda i: float(recommendations[i]["projected_season_points"]),
+        reverse=True,
+    )
+    for rank, idx in enumerate(selected_rows, start=1):
+        recommendations[idx]["selected_for_team"] = "yes"
+        recommendations[idx]["selection_rank"] = str(rank)
+        if rank == 1:
+            recommendations[idx]["is_overall_winner"] = "yes"
 
     recommendations.sort(key=lambda row: float(row["value_score"]), reverse=True)
     return recommendations
@@ -156,6 +231,11 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
         "growth_factor",
         "projected_price_gain",
         "value_score",
+        "bye_round",
+        "projected_season_points",
+        "selected_for_team",
+        "selection_rank",
+        "is_overall_winner",
     ]
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -176,10 +256,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Generate AFL SuperCoach 2026 recommendation CSV")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Output CSV path")
     parser.add_argument("--input-html", help="Local HTML file for offline/testing use")
+    parser.add_argument("--salary-cap", type=int, default=DEFAULT_SALARY_CAP, help="Team salary cap")
+    parser.add_argument("--team-size", type=int, default=DEFAULT_TEAM_SIZE, help="Number of players to select")
+    parser.add_argument(
+        "--max-players-per-bye",
+        type=int,
+        default=DEFAULT_MAX_PLAYERS_PER_BYE,
+        help="Maximum selected players sharing the same bye round",
+    )
     args = parser.parse_args()
 
     html = _read_html(args.input_html)
-    rows = build_recommendations(html)
+    rows = build_recommendations(
+        html,
+        salary_cap=args.salary_cap,
+        team_size=args.team_size,
+        max_players_per_bye=args.max_players_per_bye,
+    )
     write_csv(rows, Path(args.output))
 
     print(f"Generated {len(rows)} rows at {args.output}")
