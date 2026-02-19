@@ -467,13 +467,17 @@ def _compute_sc_trend(yearly_avgs: Dict[int, float]) -> float:
     else:
         three_year_trend = yoy_change
 
+    # >5% YoY and 3-year growth = strong upward trend (cap at 15% boost)
     if yoy_change > 0.05 and three_year_trend > 0.05:
         return min(1.15, 1.0 + three_year_trend * 0.5)
     elif yoy_change > 0 or near_peak:
+        # Moderate growth or near career high (cap at 5% boost)
         return min(1.05, 1.0 + max(yoy_change, 0) * 0.5)
     elif yoy_change > -0.05:
+        # Within 5% decline considered stable
         return 1.0
     else:
+        # Declining; floor at 5% penalty
         return max(0.95, 1.0 + yoy_change * 0.5)
 
 
@@ -563,8 +567,9 @@ def build_recommendations(
             factor = max(blended, 0.0)
 
         # Apply historical SC trend adjustment (does not override news factors)
+        has_sc_profile = sc_profiles is not None and name in sc_profiles
         sc_trend_value = 1.0
-        if sc_profiles and name in sc_profiles and news_factor is None:
+        if has_sc_profile and news_factor is None:
             sc_trend_value = _compute_sc_trend(sc_profiles[name])
             factor = factor * sc_trend_value
 
@@ -589,7 +594,7 @@ def build_recommendations(
                 "value_score": f"{value_score:.4f}",
                 "bye_round": bye_round,
                 "projected_season_points": f"{projected_season_points:.2f}",
-                "sc_trend": f"{sc_trend_value:.2f}" if sc_profiles and name in sc_profiles else "",
+                "sc_trend": f"{sc_trend_value:.2f}" if has_sc_profile else "",
                 "selected_for_team": "no",
                 "selection_rank": "",
                 "is_overall_winner": "no",
