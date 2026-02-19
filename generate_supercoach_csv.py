@@ -723,6 +723,7 @@ def generate_team_graphic(rows: List[Dict[str, str]], output_path: Path) -> None
 
     # Card dimensions
     card_w, card_h = 120, 52
+    max_card_name = 16
     h_gap, v_gap = 14, 20
     section_gap = 40
     margin_x, margin_top = 30, 80
@@ -735,7 +736,12 @@ def generate_team_graphic(rows: List[Dict[str, str]], output_path: Path) -> None
     svg_w = content_w + 2 * margin_x
 
     # Calculate total height
-    sections = [(label, players) for label, players in [("DEF", groups["DEF"]), ("MID", groups["MID"]), ("RUC", groups["RUC"]), ("FWD", groups["FWD"]), ("FLEX", flex)] if players]
+    all_sections = [
+        ("DEF", groups["DEF"]), ("MID", groups["MID"]),
+        ("RUC", groups["RUC"]), ("FWD", groups["FWD"]),
+        ("FLEX", flex),
+    ]
+    sections = [(label, players) for label, players in all_sections if players]
     total_h = margin_top
     for i, (_, players) in enumerate(sections):
         total_h += label_h + card_h
@@ -779,7 +785,7 @@ def generate_team_graphic(rows: List[Dict[str, str]], output_path: Path) -> None
             parts.append(f'<rect x="{cx}" y="{y}" width="{card_w}" height="{card_h}" rx="8" fill="none" stroke="#fff" stroke-width="1" opacity="0.3"/>')
             # Player name (truncate if needed)
             name = p.get("player", "?")
-            display_name = name if len(name) <= 16 else name[:14] + "…"
+            display_name = name if len(name) <= max_card_name else name[:max_card_name - 2] + "…"
             parts.append(f'<text x="{cx + card_w / 2}" y="{y + 19}" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#fff">{_escape_xml(display_name)}</text>')
             # Team and price
             team = p.get("team", "")
