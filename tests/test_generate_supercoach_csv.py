@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import csv
 
-from generate_supercoach_csv import build_recommendations, write_csv
+from generate_supercoach_csv import build_recommendations, write_csv, generate_team_graphic
 
 
 SAMPLE_HTML = """
@@ -394,6 +394,53 @@ class BuildRecommendationsTest(unittest.TestCase):
         players = _parse_footywire_players(html)
         self.assertEqual(len(players), 1)
         self.assertEqual(players[0]["profile_link"], "pu-western-bulldogs--marcus-bontempelli")
+
+    def test_csv_output_sorted_by_position(self):
+        html = """
+        <table>
+          <tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>
+          <tr><td>Mid Player</td><td>ADE</td><td>MID</td><td>$300,000</td><td>90.0</td></tr>
+          <tr><td>Def Player</td><td>BL</td><td>DEF</td><td>$300,000</td><td>90.0</td></tr>
+          <tr><td>Fwd Player</td><td>COLL</td><td>FWD</td><td>$300,000</td><td>90.0</td></tr>
+        </table>
+        """
+        rows = build_recommendations(html, salary_cap=1_000_000, team_size=3)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "output.csv"
+            write_csv(rows, output_path)
+            with output_path.open(newline="", encoding="utf-8") as handle:
+                output_rows = list(csv.DictReader(handle))
+        positions = [r["position"] for r in output_rows]
+        self.assertEqual(positions, ["DEF", "MID", "FWD"])
+
+    def test_generate_team_graphic_creates_svg(self):
+        html = """
+        <table>
+          <tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>
+          <tr><td>Def Player</td><td>ADE</td><td>DEF</td><td>$300,000</td><td>90.0</td></tr>
+          <tr><td>Mid Player</td><td>BL</td><td>MID</td><td>$300,000</td><td>90.0</td></tr>
+          <tr><td>Fwd Player</td><td>COLL</td><td>FWD</td><td>$300,000</td><td>90.0</td></tr>
+        </table>
+        """
+        rows = build_recommendations(html, salary_cap=1_000_000, team_size=3)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            svg_path = Path(tmpdir) / "team.svg"
+            generate_team_graphic(rows, svg_path)
+            self.assertTrue(svg_path.exists())
+            content = svg_path.read_text(encoding="utf-8")
+            self.assertIn("<svg", content)
+            self.assertIn("Def Player", content)
+            self.assertIn("Mid Player", content)
+            self.assertIn("Fwd Player", content)
+            self.assertIn("DEF", content)
+            self.assertIn("MID", content)
+            self.assertIn("FWD", content)
+
+    def test_generate_team_graphic_empty_team(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            svg_path = Path(tmpdir) / "team.svg"
+            generate_team_graphic([], svg_path)
+            self.assertFalse(svg_path.exists())
 
 
 if __name__ == "__main__":

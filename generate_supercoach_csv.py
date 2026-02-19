@@ -22,6 +22,7 @@ BREAKOUT_FALLBACK_MIN_PLAYERS = 100
 
 # Position slots for a SuperCoach squad (on-field + bench + emergency, relaxed)
 POSITION_LIMITS: Dict[str, int] = {"DEF": 9, "MID": 11, "RUC": 3, "FWD": 10}
+POSITION_ORDER: Dict[str, int] = {"DEF": 0, "MID": 1, "RUC": 2, "FWD": 3}
 
 # Footywire position URL codes
 POSITION_URL_CODES: Dict[str, str] = {"DEF": "DE", "MID": "MI", "FWD": "FO", "RUC": "RU"}
@@ -659,9 +660,20 @@ def build_recommendations(
     return recommendations
 
 
+def _position_sort_key(row: Dict[str, str]) -> Tuple[int, int]:
+    """Sort key: position group order (DEF, MID, RUC, FWD), then selection rank."""
+    primary = _primary_position(row.get("position", ""))
+    pos_order = POSITION_ORDER.get(primary, len(POSITION_ORDER))
+    rank = int(row.get("selection_rank") or 9999)
+    return (pos_order, rank)
+
+
 def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    selected_rows = [row for row in rows if row.get("selected_for_team") == "yes"]
+    selected_rows = sorted(
+        [row for row in rows if row.get("selected_for_team") == "yes"],
+        key=_position_sort_key,
+    )
     fields = [
         "generated_at_utc",
         "source_url",
@@ -685,6 +697,104 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(selected_rows)
+
+
+def _escape_xml(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&apos;").replace('"', "&quot;")
+
+
+def generate_team_graphic(rows: List[Dict[str, str]], output_path: Path) -> None:
+    """Generate an SVG graphic of the selected team in a formation layout."""
+    selected = sorted(
+        [row for row in rows if row.get("selected_for_team") == "yes"],
+        key=_position_sort_key,
+    )
+    if not selected:
+        return
+
+    groups: Dict[str, List[Dict[str, str]]] = {"DEF": [], "MID": [], "RUC": [], "FWD": []}
+    flex: List[Dict[str, str]] = []
+    for row in selected:
+        primary = _primary_position(row.get("position", ""))
+        if primary in groups:
+            groups[primary].append(row)
+        else:
+            flex.append(row)
+
+    # Card dimensions
+    card_w, card_h = 120, 52
+    h_gap, v_gap = 14, 20
+    section_gap = 40
+    margin_x, margin_top = 30, 80
+    label_h = 28
+
+    # Determine layout width based on widest row
+    max_per_row = max((len(g) for g in groups.values() if g), default=1)
+    max_per_row = max(max_per_row, len(flex) if flex else 0, 1)
+    content_w = max_per_row * card_w + (max_per_row - 1) * h_gap
+    svg_w = content_w + 2 * margin_x
+
+    # Calculate total height
+    sections = [(label, players) for label, players in [("DEF", groups["DEF"]), ("MID", groups["MID"]), ("RUC", groups["RUC"]), ("FWD", groups["FWD"]), ("FLEX", flex)] if players]
+    total_h = margin_top
+    for i, (_, players) in enumerate(sections):
+        total_h += label_h + card_h
+        if i < len(sections) - 1:
+            total_h += section_gap
+    total_h += 50  # bottom margin
+
+    parts: List[str] = []
+    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{total_h}" viewBox="0 0 {svg_w} {total_h}">')
+    parts.append('<defs>')
+    parts.append('  <linearGradient id="field" x1="0" y1="0" x2="0" y2="1">')
+    parts.append('    <stop offset="0%" stop-color="#2e7d32"/>')
+    parts.append('    <stop offset="100%" stop-color="#1b5e20"/>')
+    parts.append('  </linearGradient>')
+    parts.append('</defs>')
+    parts.append(f'<rect width="{svg_w}" height="{total_h}" rx="12" fill="url(#field)"/>')
+
+    # Title
+    parts.append(f'<text x="{svg_w / 2}" y="36" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#fff">SuperCoach 2026 — Selected Team</text>')
+    # Subtitle: total spend
+    total_spend = sum(int(r.get("price", 0)) for r in selected)
+    parts.append(f'<text x="{svg_w / 2}" y="58" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#c8e6c9">Total Spend: ${total_spend:,} / ${DEFAULT_SALARY_CAP:,}  •  {len(selected)} players</text>')
+
+    y = margin_top
+    pos_colors = {"DEF": "#1565c0", "MID": "#6a1b9a", "RUC": "#e65100", "FWD": "#c62828", "FLEX": "#37474f"}
+
+    for label, players in sections:
+        color = pos_colors.get(label, "#37474f")
+        # Section label
+        parts.append(f'<text x="{svg_w / 2}" y="{y + 16}" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#fff" opacity="0.9">{label}</text>')
+        y += label_h
+
+        n = len(players)
+        row_w = n * card_w + (n - 1) * h_gap
+        start_x = (svg_w - row_w) / 2
+
+        for j, p in enumerate(players):
+            cx = start_x + j * (card_w + h_gap)
+            # Card background
+            parts.append(f'<rect x="{cx}" y="{y}" width="{card_w}" height="{card_h}" rx="8" fill="{color}" opacity="0.85"/>')
+            parts.append(f'<rect x="{cx}" y="{y}" width="{card_w}" height="{card_h}" rx="8" fill="none" stroke="#fff" stroke-width="1" opacity="0.3"/>')
+            # Player name (truncate if needed)
+            name = p.get("player", "?")
+            display_name = name if len(name) <= 16 else name[:14] + "…"
+            parts.append(f'<text x="{cx + card_w / 2}" y="{y + 19}" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#fff">{_escape_xml(display_name)}</text>')
+            # Team and price
+            team = p.get("team", "")
+            price = int(p.get("price", 0))
+            parts.append(f'<text x="{cx + card_w / 2}" y="{y + 34}" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#e0e0e0">{_escape_xml(team)}  •  ${price:,}</text>')
+            # Projected avg
+            proj = p.get("projected_avg", "")
+            parts.append(f'<text x="{cx + card_w / 2}" y="{y + 46}" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" fill="#a5d6a7">Avg: {proj}</text>')
+
+        y += card_h + section_gap
+
+    parts.append('</svg>')
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(parts), encoding="utf-8")
 
 
 def _read_html(input_html: Optional[str]) -> str:
@@ -740,7 +850,11 @@ def main() -> int:
         position_map=position_map,
         sc_profiles=sc_profiles,
     )
-    write_csv(rows, Path(args.output))
+    output_path = Path(args.output)
+    write_csv(rows, output_path)
+
+    graphic_path = output_path.with_suffix(".svg")
+    generate_team_graphic(rows, graphic_path)
 
     selected = [r for r in rows if r["selected_for_team"] == "yes"]
     total_spend = sum(int(r["price"]) for r in selected)
@@ -751,6 +865,7 @@ def main() -> int:
         pos_summary = Counter(_primary_position(r["position"]) for r in selected)
         print(f"Positions: {dict(pos_summary)}")
     print(f"Output: {args.output}")
+    print(f"Team graphic: {graphic_path}")
     return 0
 
 
