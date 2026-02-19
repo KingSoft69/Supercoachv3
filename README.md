@@ -38,4 +38,4 @@ A GitHub Actions workflow regenerates the CSV automatically on every pull reques
 1. Go to the **Actions** tab in this repository.
 2. Select the **Update SuperCoach CSV** workflow on the left.
 3. Click the **Run workflow** button, choose a branch, and confirm.
-4. Once the run completes, download the CSV from the **Artifacts** section at the bottom of the workflow run page.
+4. Once the run completes, the updated CSV will be committed directly to the repository.
