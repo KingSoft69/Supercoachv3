@@ -498,7 +498,7 @@ def _scrape_player_profiles(
             avgs = _parse_sc_averages(html)
             if avgs:
                 profiles[name] = avgs
-        except Exception:
+        except (OSError, ValueError):
             continue
     return profiles
 
