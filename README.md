@@ -31,4 +31,11 @@ The script scrapes the footywire SuperCoach prices page and extracts:
 - Output CSV includes selected team rows only.
 - `is_overall_winner=yes` marks the top projected selected player for end-of-season output.
 
-A GitHub Actions workflow runs on every pull request and regenerates the CSV in the repository root.
+## Running the workflow
+
+A GitHub Actions workflow regenerates the CSV automatically on every pull request. You can also run it manually without creating a PR:
+
+1. Go to the **Actions** tab in this repository.
+2. Select the **Update SuperCoach CSV** workflow on the left.
+3. Click the **Run workflow** button, choose a branch, and confirm.
+4. Once the run completes, the updated CSV will be committed directly to the repository.
