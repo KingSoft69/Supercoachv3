@@ -272,6 +272,66 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertLessEqual(pos_counts.get("FWD", 0), 10)
         self.assertLessEqual(pos_counts.get("RUC", 0), 4)
 
+    def test_budget_reserves_funds_for_all_positions(self):
+        """Ensure the salary cap is distributed so FWDs are not all rookies."""
+        rows_html = []
+        # Premium MIDs (highest projected points, dominate greedy selection)
+        for i in range(12):
+            rows_html.append(
+                f"<tr><td>Premium Mid {i}</td><td>BL</td><td>MID</td>"
+                f"<td>$560,000</td><td>105.0</td></tr>"
+            )
+        # Good DEFs
+        for i in range(10):
+            rows_html.append(
+                f"<tr><td>Good Def {i}</td><td>ADE</td><td>DEF</td>"
+                f"<td>$400,000</td><td>85.0</td></tr>"
+            )
+        # Good FWDs (should be selected, not only rookies)
+        for i in range(10):
+            rows_html.append(
+                f"<tr><td>Good Fwd {i}</td><td>COLL</td><td>FWD</td>"
+                f"<td>$350,000</td><td>80.0</td></tr>"
+            )
+        # Rookies for each position
+        for i in range(10):
+            rows_html.append(
+                f"<tr><td>Rookie Fwd {i}</td><td>ESS</td><td>FWD</td>"
+                f"<td>$100,000</td><td>20.0</td></tr>"
+            )
+        for i in range(10):
+            rows_html.append(
+                f"<tr><td>Rookie Def {i}</td><td>HAW</td><td>DEF</td>"
+                f"<td>$100,000</td><td>20.0</td></tr>"
+            )
+        for i in range(10):
+            rows_html.append(
+                f"<tr><td>Rookie Mid {i}</td><td>GCS</td><td>MID</td>"
+                f"<td>$100,000</td><td>20.0</td></tr>"
+            )
+        for i in range(4):
+            rows_html.append(
+                f"<tr><td>Ruc {i}</td><td>GEE</td><td>RUC</td>"
+                f"<td>$300,000</td><td>75.0</td></tr>"
+            )
+        for i in range(4):
+            rows_html.append(
+                f"<tr><td>Rookie Ruc {i}</td><td>MEL</td><td>RUC</td>"
+                f"<td>$100,000</td><td>20.0</td></tr>"
+            )
+        html = (
+            "<table>"
+            "<tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>"
+            + "".join(rows_html)
+            + "</table>"
+        )
+        rows = build_recommendations(html, team_size=30, salary_cap=10_000_000)
+        selected = [r for r in rows if r["selected_for_team"] == "yes"]
+        self.assertEqual(len(selected), 30)
+        fwd_selected = [r for r in selected if r["position"] == "FWD"]
+        non_rookie_fwds = [r for r in fwd_selected if int(r["price"]) > 100_000]
+        self.assertGreaterEqual(len(non_rookie_fwds), 2, "Budget should be reserved for quality FWDs")
+
     def test_matt_rowell_injury_reduces_growth_factor(self):
         rows = build_recommendations(SAMPLE_HTML_ROWELL_AND_RUCKS, team_size=4, salary_cap=5_000_000)
         by_player = {row["player"]: row for row in rows}
