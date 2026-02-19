@@ -29,6 +29,12 @@ jobs:
       - name: Generate CSV
         run: python generate_supercoach_csv.py --output supercoach_2026_output.csv
 
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supercoach-2026-csv
+          path: supercoach_2026_output.csv
+
       - name: Commit CSV changes
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
