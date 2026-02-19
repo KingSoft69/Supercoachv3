@@ -121,6 +121,7 @@ class _FootywireParser(HTMLParser):
         self._current_cell_parts: List[str] = []
         self._current_player_name = ""
         self._current_team = ""
+        self._current_profile_link = ""
         self._in_hidden_span = False
         self._hidden_span_id = ""
 
@@ -134,9 +135,14 @@ class _FootywireParser(HTMLParser):
                 self._current_cells = []
                 self._current_player_name = ""
                 self._current_team = ""
+                self._current_profile_link = ""
         elif self._in_player_row and tag == "td":
             self._in_cell = True
             self._current_cell_parts = []
+        elif self._in_player_row and tag == "a":
+            href = attr_dict.get("href", "")
+            if href.startswith("pu-"):
+                self._current_profile_link = href
         elif self._in_player_row and tag == "span":
             span_id = attr_dict.get("id", "")
             span_cls = attr_dict.get("class", "")
@@ -159,13 +165,16 @@ class _FootywireParser(HTMLParser):
                 price_str = self._current_cells[1] if len(self._current_cells) > 1 else ""
                 expected_price = self._current_cells[5] if len(self._current_cells) > 5 else ""
                 expected_price_3 = self._current_cells[9] if len(self._current_cells) > 9 else ""
-                self.players.append({
+                entry: Dict[str, str] = {
                     "player": self._current_player_name,
                     "team": self._current_team,
                     "current": price_str,
                     "expected_price": expected_price,
                     "expected_price_3": expected_price_3,
-                })
+                }
+                if self._current_profile_link:
+                    entry["profile_link"] = self._current_profile_link
+                self.players.append(entry)
 
     def handle_data(self, data: str) -> None:
         if self._in_hidden_span:
@@ -411,12 +420,92 @@ def _parse_footywire_players(html: str) -> List[Dict[str, str]]:
     return fw.players
 
 
+def _parse_sc_averages(html: str) -> Dict[int, float]:
+    """Parse a player profile page and extract Past Supercoach Average Scores."""
+    marker = "Past Supercoach Average Scores"
+    idx = html.find(marker)
+    if idx == -1:
+        return {}
+    section = html[idx:]
+    pattern = r'>(\d{4})</a></td>\s*<td[^>]*>\d+</td>\s*<td[^>]*>([\d.]+)</td>'
+    results: Dict[int, float] = {}
+    for m in re.finditer(pattern, section):
+        year = int(m.group(1))
+        avg = float(m.group(2))
+        results[year] = avg
+    return results
+
+
+def _compute_sc_trend(yearly_avgs: Dict[int, float]) -> float:
+    """Compute a trend multiplier based on historical SC averages."""
+    if len(yearly_avgs) < 2:
+        return 1.0
+
+    sorted_years = sorted(yearly_avgs.keys())
+    recent_years = sorted_years[-3:]
+
+    if len(recent_years) < 2:
+        return 1.0
+
+    latest_avg = yearly_avgs[recent_years[-1]]
+    prior_avg = yearly_avgs[recent_years[-2]]
+
+    if prior_avg <= 0 or latest_avg <= 0:
+        return 1.0
+
+    yoy_change = (latest_avg - prior_avg) / prior_avg
+
+    career_high = max(yearly_avgs.values())
+    near_peak = latest_avg >= career_high * 0.95
+
+    if len(recent_years) >= 3:
+        earliest_avg = yearly_avgs[recent_years[0]]
+        if earliest_avg > 0:
+            three_year_trend = (latest_avg - earliest_avg) / earliest_avg
+        else:
+            three_year_trend = 0.0
+    else:
+        three_year_trend = yoy_change
+
+    if yoy_change > 0.05 and three_year_trend > 0.05:
+        return min(1.15, 1.0 + three_year_trend * 0.5)
+    elif yoy_change > 0 or near_peak:
+        return min(1.05, 1.0 + max(yoy_change, 0) * 0.5)
+    elif yoy_change > -0.05:
+        return 1.0
+    else:
+        return max(0.95, 1.0 + yoy_change * 0.5)
+
+
+def _scrape_player_profiles(
+    players: List[Dict[str, str]], base_url: str
+) -> Dict[str, Dict[int, float]]:
+    """Fetch individual profile pages and extract historical SC averages."""
+    profiles: Dict[str, Dict[int, float]] = {}
+    base = base_url.rsplit("/", 1)[0]
+    for player in players:
+        link = player.get("profile_link", "")
+        name = player.get("player", "")
+        if not link or not name:
+            continue
+        url = f"{base}/{link}"
+        try:
+            html = _fetch_url(url)
+            avgs = _parse_sc_averages(html)
+            if avgs:
+                profiles[name] = avgs
+        except Exception:
+            continue
+    return profiles
+
+
 def build_recommendations(
     html: str,
     salary_cap: int = DEFAULT_SALARY_CAP,
     team_size: int = DEFAULT_TEAM_SIZE,
     max_players_per_bye: int = DEFAULT_MAX_PLAYERS_PER_BYE,
     position_map: Optional[Dict[str, str]] = None,
+    sc_profiles: Optional[Dict[str, Dict[int, float]]] = None,
 ) -> List[Dict[str, str]]:
     # Try footywire-specific parser first; fall back to generic table parser
     fw_players = _parse_footywire_players(html)
@@ -473,6 +562,12 @@ def build_recommendations(
             blended = (factor + expected_change_ratio) / 2.0
             factor = max(blended, 0.0)
 
+        # Apply historical SC trend adjustment (does not override news factors)
+        sc_trend_value = 1.0
+        if sc_profiles and name in sc_profiles and news_factor is None:
+            sc_trend_value = _compute_sc_trend(sc_profiles[name])
+            factor = factor * sc_trend_value
+
         projected_avg = current_avg * factor
         projected_price_gain = int(price * (factor - 1.0))
         value_score = projected_avg / (price / 100000.0)
@@ -494,6 +589,7 @@ def build_recommendations(
                 "value_score": f"{value_score:.4f}",
                 "bye_round": bye_round,
                 "projected_season_points": f"{projected_season_points:.2f}",
+                "sc_trend": f"{sc_trend_value:.2f}" if sc_profiles and name in sc_profiles else "",
                 "selected_for_team": "no",
                 "selection_rank": "",
                 "is_overall_winner": "no",
@@ -530,6 +626,7 @@ def build_recommendations(
                     "value_score": f"{value_score:.4f}",
                     "bye_round": "",
                     "projected_season_points": f"{projected_season_points:.2f}",
+                    "sc_trend": "",
                     "selected_for_team": "no",
                     "selection_rank": "",
                     "is_overall_winner": "no",
@@ -574,6 +671,7 @@ def write_csv(rows: List[Dict[str, str]], output_path: Path) -> None:
         "value_score",
         "bye_round",
         "projected_season_points",
+        "sc_trend",
         "selected_for_team",
         "selection_rank",
         "is_overall_winner",
@@ -610,6 +708,11 @@ def main() -> int:
         action="store_true",
         help="Skip fetching per-position pages (faster but no position data)",
     )
+    ap.add_argument(
+        "--skip-profiles",
+        action="store_true",
+        help="Skip fetching individual player profile pages for SC trend data",
+    )
     args = ap.parse_args()
 
     html = _read_html(args.input_html)
@@ -618,12 +721,19 @@ def main() -> int:
     if not args.input_html and not args.skip_positions:
         position_map = _scrape_position_map(SOURCE_URL)
 
+    sc_profiles: Optional[Dict[str, Dict[int, float]]] = None
+    if not args.input_html and not args.skip_profiles:
+        fw_players = _parse_footywire_players(html)
+        if fw_players:
+            sc_profiles = _scrape_player_profiles(fw_players, SOURCE_URL)
+
     rows = build_recommendations(
         html,
         salary_cap=args.salary_cap,
         team_size=args.team_size,
         max_players_per_bye=args.max_players_per_bye,
         position_map=position_map,
+        sc_profiles=sc_profiles,
     )
     write_csv(rows, Path(args.output))
 

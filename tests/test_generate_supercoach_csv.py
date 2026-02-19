@@ -306,6 +306,95 @@ class BuildRecommendationsTest(unittest.TestCase):
         factor = float(player["growth_factor"])
         self.assertGreater(factor, 1.0)
 
+    def test_parse_sc_averages_extracts_yearly_data(self):
+        from generate_supercoach_csv import _parse_sc_averages
+        html = '''
+        <table>
+        <tr><td class="tbtitle">Past Supercoach Average Scores</td></tr>
+        <tr><td><table>
+        <tr><td class="bnorm">Year</td><td class="bnorm">Games</td><td class="bnorm">Average</td></tr>
+        <tr class="darkcolor"><td><a rel="nofollow" href="...">2022</a></td><td>21</td><td>116.1</td></tr>
+        <tr class="lightcolor"><td><a rel="nofollow" href="...">2023</a></td><td>23</td><td>129.7</td></tr>
+        <tr class="darkcolor"><td><a rel="nofollow" href="...">2024</a></td><td>23</td><td>126.4</td></tr>
+        <tr class="lightcolor"><td><a rel="nofollow" href="...">2025</a></td><td>18</td><td>130.6</td></tr>
+        </table></td></tr>
+        </table>
+        '''
+        avgs = _parse_sc_averages(html)
+        self.assertEqual(avgs[2022], 116.1)
+        self.assertEqual(avgs[2023], 129.7)
+        self.assertEqual(avgs[2024], 126.4)
+        self.assertEqual(avgs[2025], 130.6)
+
+    def test_compute_sc_trend_upward(self):
+        from generate_supercoach_csv import _compute_sc_trend
+        avgs = {2022: 80.0, 2023: 90.0, 2024: 100.0}
+        trend = _compute_sc_trend(avgs)
+        self.assertGreater(trend, 1.05)
+
+    def test_compute_sc_trend_peaking(self):
+        from generate_supercoach_csv import _compute_sc_trend
+        avgs = {2022: 120.0, 2023: 129.7, 2024: 126.4, 2025: 130.6}
+        trend = _compute_sc_trend(avgs)
+        self.assertGreaterEqual(trend, 1.0)
+
+    def test_compute_sc_trend_declining(self):
+        from generate_supercoach_csv import _compute_sc_trend
+        avgs = {2022: 120.0, 2023: 110.0, 2024: 95.0}
+        trend = _compute_sc_trend(avgs)
+        self.assertLess(trend, 1.0)
+
+    def test_compute_sc_trend_insufficient_data(self):
+        from generate_supercoach_csv import _compute_sc_trend
+        avgs = {2024: 100.0}
+        trend = _compute_sc_trend(avgs)
+        self.assertEqual(trend, 1.0)
+
+    def test_sc_trend_applied_to_recommendations(self):
+        html = """
+        <table>
+          <tr><th>Player</th><th>Team</th><th>Position</th><th>Price</th><th>2025 Avg</th></tr>
+          <tr><td>Trending Up</td><td>ADE</td><td>MID</td><td>$400,000</td><td>100.0</td></tr>
+          <tr><td>Declining Star</td><td>BL</td><td>MID</td><td>$400,000</td><td>100.0</td></tr>
+        </table>
+        """
+        sc_profiles = {
+            "Trending Up": {2022: 70.0, 2023: 85.0, 2024: 100.0},
+            "Declining Star": {2022: 120.0, 2023: 110.0, 2024: 95.0},
+        }
+        rows = build_recommendations(html, team_size=2, salary_cap=1_000_000, sc_profiles=sc_profiles)
+        by_player = {r["player"]: r for r in rows}
+        trending_factor = float(by_player["Trending Up"]["growth_factor"])
+        declining_factor = float(by_player["Declining Star"]["growth_factor"])
+        self.assertGreater(trending_factor, declining_factor)
+
+    def test_footywire_parser_captures_profile_link(self):
+        from generate_supercoach_csv import _parse_footywire_players
+        html = '''
+        <table>
+        <tr class="darkcolor" id="rowpid_3921">
+        <td height="24" align="left" nowrap>
+         <span class="hiddenspan" id="cellpid_3921">Marcus Bontempelli</span>
+         <a href="pu-western-bulldogs--marcus-bontempelli" id="cellapid_3921">M Bontempelli</a>
+         <span class="hiddenspan" id="celltid_3921">Bulldogs</span>
+        </td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">?</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        <td align="center">$706,800</td>
+        <td align="center">+$0</td>
+        </tr>
+        </table>
+        '''
+        players = _parse_footywire_players(html)
+        self.assertEqual(len(players), 1)
+        self.assertEqual(players[0]["profile_link"], "pu-western-bulldogs--marcus-bontempelli")
+
 
 if __name__ == "__main__":
     unittest.main()
