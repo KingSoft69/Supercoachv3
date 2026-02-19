@@ -255,6 +255,61 @@ def _fits_position(position: str, slot: str) -> bool:
     return slot in [p.strip() for p in position.split("/") if p.strip()]
 
 
+def _min_position_aware_cost(
+    rows: List[Dict[str, str]],
+    available: List[int],
+    pos_counts: Dict[str, int],
+    remaining_slots: int,
+) -> Optional[int]:
+    """Compute minimum cost to fill remaining slots while respecting position minimums.
+
+    Dynamically derives the minimum players needed per position from
+    ``POSITION_LIMITS`` and the number of remaining slots.  Returns ``None``
+    if the requirements cannot be met.
+    """
+    pos_available = {pos: limit - pos_counts.get(pos, 0) for pos, limit in POSITION_LIMITS.items()}
+
+    pos_min_needed: Dict[str, int] = {}
+    for pos in POSITION_LIMITS:
+        other_capacity = sum(v for p, v in pos_available.items() if p != pos)
+        pos_min_needed[pos] = max(0, remaining_slots - other_capacity)
+
+    available_by_price = sorted(available, key=lambda j: int(rows[j]["price"]))
+
+    reserved: Set[int] = set()
+    total_cost = 0
+
+    for pos in POSITION_LIMITS:
+        needed = pos_min_needed[pos]
+        filled = 0
+        for j in available_by_price:
+            if filled >= needed:
+                break
+            if j in reserved:
+                continue
+            if _fits_position(rows[j].get("position", ""), pos):
+                reserved.add(j)
+                total_cost += int(rows[j]["price"])
+                filled += 1
+        if filled < needed:
+            return None
+
+    flex_needed = remaining_slots - len(reserved)
+    for j in available_by_price:
+        if flex_needed <= 0:
+            break
+        if j in reserved:
+            continue
+        reserved.add(j)
+        total_cost += int(rows[j]["price"])
+        flex_needed -= 1
+
+    if flex_needed > 0:
+        return None
+
+    return total_cost
+
+
 def _select_team(
     rows: List[Dict[str, str]], salary_cap: int, team_size: int, max_players_per_bye: int
 ) -> List[int]:
@@ -270,6 +325,30 @@ def _select_team(
 
     position_set = {rows[i].get("position", "") for i in ordered} - {""}
     use_position_limits = len(position_set) >= 2 and team_size >= 20
+
+    if use_position_limits:
+        pos_queues: Dict[str, List[int]] = {pos: [] for pos in POSITION_LIMITS}
+        no_pos: List[int] = []
+        for i in ordered:
+            primary = _primary_position(rows[i].get("position", ""))
+            if primary in pos_queues:
+                pos_queues[primary].append(i)
+            else:
+                no_pos.append(i)
+        interleaved: List[int] = []
+        iters = {pos: iter(q) for pos, q in pos_queues.items()}
+        while True:
+            added = False
+            for pos in POSITION_LIMITS:
+                try:
+                    interleaved.append(next(iters[pos]))
+                    added = True
+                except StopIteration:
+                    pass
+            if not added:
+                break
+        interleaved.extend(no_pos)
+        ordered = interleaved
 
     selected: List[int] = []
     selected_set: Set[int] = set()
@@ -290,15 +369,27 @@ def _select_team(
 
         remaining_slots = team_size - len(selected) - 1
         if remaining_slots > 0:
-            cheapest_remaining = nsmallest(
-                remaining_slots,
-                (int(rows[j]["price"]) for j in ordered if j != idx and j not in selected_set),
-            )
-            if len(cheapest_remaining) < remaining_slots:
-                continue
-            min_required = sum(cheapest_remaining)
-            if total_price + price + min_required > salary_cap:
-                continue
+            available = [j for j in ordered if j != idx and j not in selected_set]
+            if use_position_limits:
+                tentative_pos = dict(pos_counts)
+                if position:
+                    primary = _primary_position(position)
+                    tentative_pos[primary] = tentative_pos.get(primary, 0) + 1
+                min_required = _min_position_aware_cost(
+                    rows, available, tentative_pos, remaining_slots
+                )
+                if min_required is None or total_price + price + min_required > salary_cap:
+                    continue
+            else:
+                cheapest_remaining = nsmallest(
+                    remaining_slots,
+                    (int(rows[j]["price"]) for j in available),
+                )
+                if len(cheapest_remaining) < remaining_slots:
+                    continue
+                min_required = sum(cheapest_remaining)
+                if total_price + price + min_required > salary_cap:
+                    continue
 
         if bye_round and bye_counts.get(bye_round, 0) >= max_players_per_bye:
             continue
