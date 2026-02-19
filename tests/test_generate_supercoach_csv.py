@@ -330,7 +330,7 @@ class BuildRecommendationsTest(unittest.TestCase):
         self.assertEqual(len(selected), 30)
         fwd_selected = [r for r in selected if r["position"] == "FWD"]
         non_rookie_fwds = [r for r in fwd_selected if int(r["price"]) > 100_000]
-        self.assertGreater(len(non_rookie_fwds), 0, "At least one FWD should not be a rookie")
+        self.assertGreaterEqual(len(non_rookie_fwds), 2, "Budget should be reserved for quality FWDs")
 
     def test_matt_rowell_injury_reduces_growth_factor(self):
         rows = build_recommendations(SAMPLE_HTML_ROWELL_AND_RUCKS, team_size=4, salary_cap=5_000_000)
